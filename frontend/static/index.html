@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>xuanFP · 智能股票工作台</title>
+<link rel="stylesheet" href="/vendor/element-plus.css" />
+<link rel="stylesheet" href="/vendor/element-plus.dark.css" />
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2128;--border:#30363d;--text:#c9d1d9;--muted:#8b949e;--accent:#3b82f6;--up:#f5222d;--down:#52c41a}
+html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI","Microsoft YaHei",Roboto,sans-serif}
+*{box-sizing:border-box}
+.xuanfp{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+.header{display:flex;align-items:center;gap:16px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--border)}
+.header .logo{font-size:20px;font-weight:700;color:#fff}
+.header .logo span{color:var(--accent)}
+.header .indices{display:flex;gap:14px;margin-left:12px;font-size:13px;flex-wrap:wrap}
+.header .indices .idx{color:var(--muted);white-space:nowrap}
+.header .indices .idx b{color:var(--text);font-weight:600}
+.header .spacer{flex:1}
+.content{flex:1;overflow:auto;padding:16px 20px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+.panel h3{margin:0 0 12px;font-size:15px;color:#e6edf3}
+.progress-box{margin-top:12px}
+.progress-box .phase{font-size:13px;color:var(--muted);margin-bottom:6px}
+.logic-card{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px;font-size:14px;line-height:1.6;color:#dbe4ec}
+.logic-card .no{color:var(--accent);font-weight:700;margin-right:6px}
+.score-strong{color:#f59e0b;font-weight:700}
+.el-table{--el-table-bg-color:transparent;--el-table-tr-bg-color:transparent}
+.drawer-body{padding:4px 4px 24px}
+.chart{width:100%;height:300px}
+.chart-sm{width:100%;height:380px}
+.clickable{cursor:pointer}
+.md h2{font-size:15px;color:#e6edf3;margin:14px 0 6px;border-left:3px solid var(--accent);padding-left:8px}
+.md h3{font-size:14px;color:#e6edf3;margin:12px 0 4px}
+.md p{margin:6px 0;line-height:1.7;color:#c9d1d9;font-size:13.5px}
+.md strong{color:#fff}
+.md blockquote{margin:8px 0;padding:6px 12px;background:#21262d;border-left:3px solid #f59e0b;color:#8b949e;font-size:12.5px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script type="text/x-template" id="app-tpl">
+<div class="xuanfp">
+  <div class="header">
+    <div class="logo">xuan<span>FP</span> 智能股票工作台</div>
+    <div class="indices">
+      <div v-for="(v,k) in indices" :key="k" class="idx">
+        {{ v.name }} <b :style="{color: v.pct_chg>=0 ? 'var(--up)' : 'var(--down)'}">{{ v.price }} {{ fmtPct(v.pct_chg) }}</b>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <el-button type="primary" size="large" :loading="scanning" @click="startScan">{{ scanning ? '扫描中…' : '🚀 开始扫描' }}</el-button>
+    <el-button size="large" @click="historyVisible=true">📊 历史对比</el-button>
+    <el-button size="large" circle @click="settingsVisible=true">⚙</el-button>
+  </div>
+
+  <div class="content">
+    <div v-if="scanning || scanMsg" class="panel">
+      <h3>扫描进度</h3>
+      <div class="progress-box">
+        <div class="phase">{{ scanMsg }}</div>
+        <el-progress :percentage="progressPct" :stroke-width="14" striped striped-flow />
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>🏆 综合排名 Top 20
+        <span v-if="latestRun" style="color:var(--muted);font-weight:400;font-size:12px">（{{ latestRun.stats?.date }} · 覆盖 {{ latestRun.stats?.universe }} 只 · 评分池 {{ latestRun.stats?.pool }} 只 · 耗时 {{ latestRun.stats?.duration }}s）</span>
+      </h3>
+      <el-table :data="top20" style="width:100%" :header-cell-style="{background:'var(--panel2)',color:'#8b949e'}" @row-click="openDetail" row-class-name="clickable">
+        <el-table-column prop="rank" label="排名" width="70" sortable />
+        <el-table-column prop="ts_code" label="股票代码" width="120" />
+        <el-table-column prop="name" label="股票名称" min-width="120">
+          <template #default="{ row }"><span style="color:#e6edf3;font-weight:600">{{ row.name }}</span></template>
+        </el-table-column>
+        <el-table-column prop="price" label="最新价" width="90" />
+        <el-table-column label="所属行业" min-width="110">
+          <template #default="{ row }">{{ row.sw_industry || row.industry || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="综合得分" width="140" sortable prop="score">
+          <template #default="{ row }">
+            <el-progress :percentage="Math.round(row.score)" :stroke-width="12" :color="scoreColor(row.score)" />
+            <span class="score-strong">{{ row.score }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="标注" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.score>85" type="warning" effect="dark" size="small">【强烈关注】</el-tag>
+            <span v-else style="color:var(--muted)">—</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
+    <div class="panel">
+      <h3>📌 今日扫描 Top 3 核心逻辑</h3>
+      <div v-if="summary.top3_logic && summary.top3_logic.length">
+        <div v-for="(line,i) in summary.top3_logic" :key="i" class="logic-card"><span class="no">{{ ['①','②','③'][i] || (i+1) }}</span>{{ line }}</div>
+      </div>
+      <div v-else style="color:var(--muted)">暂无扫描结果，点击「开始扫描」生成。</div>
+      <div v-if="summary.industry_stats && summary.industry_stats.length" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">
+        <el-tag v-for="it in summary.industry_stats" :key="it.industry" effect="plain" size="small">{{ it.industry }} · {{ it.count }}只</el-tag>
+      </div>
+    </div>
+
+    <div v-if="summary.data_gaps && summary.data_gaps.length" class="panel" style="opacity:.85">
+      <h3>ℹ️ 数据缺口与简化说明</h3>
+      <ul style="margin:0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.8">
+        <li v-for="g in summary.data_gaps" :key="g">{{ g }}</li>
+      </ul>
+    </div>
+  </div>
+
+  <el-drawer v-model="detailVisible" size="62%" :title="detailTitle">
+    <div class="drawer-body" v-if="detail">
+      <div style="display:flex;gap:12px;align-items:baseline;margin-bottom:12px">
+        <span style="font-size:22px;font-weight:700">{{ detail.name }}</span>
+        <span style="color:var(--muted)">{{ detail.ts_code }} · {{ detail.industry }}</span>
+        <span class="score-strong" style="font-size:20px;margin-left:auto">{{ detail.score }} 分</span>
+      </div>
+      <el-tabs v-model="tab">
+        <el-tab-pane label="K线图" name="kline"><div ref="klineEl" class="chart"></div></el-tab-pane>
+        <el-tab-pane label="九维雷达" name="radar"><div ref="radarEl" class="chart-sm"></div></el-tab-pane>
+        <el-tab-pane label="因子明细" name="factors">
+          <el-table :data="factorRows" class="factor-table" size="small" max-height="520">
+            <el-table-column prop="name" label="因子" min-width="150" />
+            <el-table-column label="得分" width="70">
+              <template #default="{ row }"><b>{{ row.score==null ? '—' : Math.round(row.score) }}</b></template>
+            </el-table-column>
+            <el-table-column prop="note" label="说明" min-width="240" show-overflow-tooltip />
+          </el-table>
+        </el-tab-pane>
+        <el-tab-pane label="AI 分析报告" name="report">
+          <div v-if="report" class="md" v-html="renderMd(report)"></div>
+          <div v-else style="color:var(--muted)">报告生成中或未配置大模型…</div>
+        </el-tab-pane>
+      </el-tabs>
+    </div>
+  </el-drawer>
+
+  <el-dialog v-model="historyVisible" title="扫描历史对比" width="860px">
+    <div style="display:flex;gap:10px;margin-bottom:12px">
+      <el-select v-model="cmpA" placeholder="基准扫描" style="flex:1">
+        <el-option v-for="r in runs" :key="r.id" :label="runLabel(r)" :value="r.id" />
+      </el-select>
+      <el-select v-model="cmpB" placeholder="对比扫描" style="flex:1">
+        <el-option v-for="r in runs" :key="r.id" :label="runLabel(r)" :value="r.id" />
+      </el-select>
+      <el-button type="primary" :disabled="!cmpA || !cmpB" @click="doCompare">对比</el-button>
+    </div>
+    <el-table :data="compareRows" size="small" max-height="440">
+      <el-table-column prop="ts_code" label="代码" width="110" />
+      <el-table-column prop="name" label="名称" width="120" />
+      <el-table-column label="得分变化" width="150">
+        <template #default="{ row }"><span :style="{color: row.diff>=0 ? 'var(--up)' : 'var(--down)'}">{{ row.score_a }} → {{ row.score_b }}（{{ row.diff>0?'+':'' }}{{ row.diff }}）</span></template>
+      </el-table-column>
+      <el-table-column label="排名变化" width="120">
+        <template #default="{ row }">{{ row.rank_a || '-' }} → {{ row.rank_b }}</template>
+      </el-table-column>
+      <el-table-column prop="change" label="类型" width="100">
+        <template #default="{ row }"><el-tag :type="row.diff>=0?'success':'danger'" size="small">{{ row.diff>=0?'上升':'下降' }}</el-tag></template>
+      </el-table-column>
+    </el-table>
+  </el-dialog>
+
+  <el-dialog v-model="settingsVisible" title="设置" width="640px">
+    <el-form label-width="140px" label-position="left">
+      <el-divider content-position="left">大模型（LLM 报告生成）</el-divider>
+      <el-form-item label="API 地址"><el-input v-model="cfgForm.llm.base_url" placeholder="https://api.deepseek.com/v1" /></el-form-item>
+      <el-form-item label="API Key"><el-input v-model="cfgForm.llm.api_key" type="password" show-password placeholder="留空则使用模板报告" /></el-form-item>
+      <el-form-item label="模型名称"><el-input v-model="cfgForm.llm.model" placeholder="deepseek-chat" /></el-form-item>
+      <el-form-item label="报告数量 Top N"><el-input-number v-model="cfgForm.llm.top_n_reports" :min="1" :max="50" /></el-form-item>
+      <el-divider content-position="left">Tushare 数据通道</el-divider>
+      <el-form-item label="PCD API Key"><el-input v-model="cfgForm.tushare.pcd_api_key" /></el-form-item>
+      <el-form-item label="RDS API Key"><el-input v-model="cfgForm.tushare.rds_api_key" /></el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="settingsVisible=false">取消</el-button>
+      <el-button type="primary" @click="saveSettings">保存</el-button>
+    </template>
+  </el-dialog>
+</div>
+</script>
+
+<script src="/vendor/vue.global.prod.js"></script>
+<script src="/vendor/element-plus.full.min.js"></script>
+<script src="/vendor/echarts.min.js"></script>
+<script>
+const { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, createApp } = Vue
+const ElMessage = ElementPlus.ElMessage
+
+const DIM_ORDER = ['value','quality','growth','trend','momentum','capital','chip','safety','macro']
+const DIM_NAME = { value:'价值估值', quality:'资产质量', growth:'盈利成长', trend:'趋势技术面', momentum:'量价动能', capital:'主力资金流', chip:'筹码与情绪', safety:'安全边际', macro:'景气与宏观' }
+
+const api = {
+  async req(path, opts={}) {
+    const r = await fetch(path, { headers:{'Content-Type':'application/json'}, ...opts })
+    if (!r.ok) throw new Error(r.status + ' ' + r.statusText)
+    return r.json()
+  },
+  config: () => api.req('/api/config'),
+  saveConfig: (b) => api.req('/api/config', { method:'PUT', body:JSON.stringify(b) }),
+  startScan: () => api.req('/api/scan', { method:'POST' }),
+  scanProgress: () => api.req('/api/scan/progress'),
+  scanResult: (id) => api.req('/api/scan/' + id),
+  latestScan: () => api.req('/api/scan/latest'),
+  marketOverview: () => api.req('/api/market/overview'),
+  stockDetail: (code, runId) => api.req('/api/stocks/' + code + '/detail?run_id=' + (runId||'')),
+  history: () => api.req('/api/history'),
+  compare: (a,b) => api.req('/api/history/compare?a='+a+'&b='+b)
+}
+
+const app = createApp({
+  template: '#app-tpl',
+  setup() {
+    const indices = ref({})
+    const top20 = ref([])
+    const summary = ref({})
+    const latestRun = ref(null)
+    const scanning = ref(false)
+    const scanMsg = ref('')
+    const progressPct = ref(0)
+    const detailVisible = ref(false)
+    const detail = ref(null)
+    const detailTitle = ref('')
+    const tab = ref('kline')
+    const report = ref('')
+    const klineEl = ref(null)
+    const radarEl = ref(null)
+    const factorRows = ref([])
+    const historyVisible = ref(false)
+    const settingsVisible = ref(false)
+    const runs = ref([])
+    const cmpA = ref(null)
+    const cmpB = ref(null)
+    const compareRows = ref([])
+    const cfgForm = ref({ llm:{base_url:'',api_key:'',model:'',top_n_reports:10}, tushare:{pcd_api_key:'',rds_api_key:''} })
+
+    let pollTimer = null
+    let klineChart = null
+    let radarChart = null
+
+    const fmtPct = (v) => (v==null ? '—' : (v>0?'+':'') + Number(v).toFixed(2) + '%')
+    const scoreColor = (s) => s>85 ? '#f59e0b' : s>70 ? '#3b82f6' : s>60 ? '#10b981' : '#6b7280'
+    const runLabel = (r) => { const d = r.stats?.date || new Date(r.created_at*1000).toLocaleDateString(); return '#'+r.id+' '+d+'（池 '+(r.passed_size ?? '-')+'）' }
+
+    function renderMd(text) {
+      if (!text) return ''
+      let h = String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      h = h.replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h2>$1</h2>')
+      h = h.replace(/^> (.*)$/gm,'<blockquote>$1</blockquote>')
+      h = h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      h = h.replace(/^[-*] (.*)$/gm,'<p>• $1</p>')
+      h = h.replace(/\n/g,'<br/>').replace(/<br\/><br\/>/g,'</p><p>')
+      return '<p>'+h+'</p>'
+    }
+
+    async function loadOverview() {
+      try { const d = await api.marketOverview(); indices.value = d.indices || {} } catch(e){}
+    }
+    async function loadLatest() {
+      try {
+        const d = await api.latestScan()
+        if (d.run) { latestRun.value = d.run; summary.value = d.run.summary || {}; top20.value = (d.run.top20 || []).map((r,i)=>({...r,rank:i+1})) }
+      } catch(e){}
+    }
+    async function startScan() {
+      if (scanning.value) return
+      try {
+        await api.startScan()
+        scanning.value = true; scanMsg.value = '扫描启动中…'; progressPct.value = 0
+        pollTimer = setInterval(pollProgress, 1500)
+      } catch(e) { ElMessage.error('启动扫描失败: ' + e.message) }
+    }
+    async function pollProgress() {
+      try {
+        const p = await api.scanProgress()
+        scanMsg.value = p.message || p.phase
+        if (p.total > 0) progressPct.value = Math.round(p.done/p.total*100)
+        if (p.phase === 'done' && !p.running) { clearInterval(pollTimer); scanning.value=false; progressPct.value=100; ElMessage.success('扫描完成！'); await loadLatest() }
+        else if (p.phase === 'failed' && !p.running) { clearInterval(pollTimer); scanning.value=false; ElMessage.error(p.message || '扫描失败') }
+      } catch(e){}
+    }
+
+    async function openDetail(row) {
+      detailVisible.value = true
+      detailTitle.value = row.name + '（' + row.ts_code + '）'
+      detail.value = row; tab.value = 'kline'; report.value = ''; factorRows.value = []
+      try {
+        const d = await api.stockDetail(row.ts_code, latestRun.value?.id)
+        detail.value = d.stock; report.value = d.report
+        factorRows.value = buildFactorRows(d.stock)
+        await nextTick()
+        renderKline(d.kline)
+        if (tab.value === 'radar') renderRadar(d.stock)
+      } catch(e) { ElMessage.warning('详情加载失败: ' + e.message) }
+    }
+    function buildFactorRows(stock) {
+      const rows = []
+      const dims = stock.dimensions || {}
+      for (const dim of DIM_ORDER) {
+        const d = dims[dim]
+        rows.push({ name:'【'+DIM_NAME[dim]+'】'+(d?.score!=null ? d.score+' 分' : '缺失(降权)'), score:null, note:'可得 '+(d?.available)+'/'+(d?.total)+' 因子', _dim:true })
+        const fs = stock.factors || {}
+        for (const k of Object.keys(fs)) if (fs[k].dim === dim) rows.push({ name:fs[k].name, score:fs[k].score, note:fs[k].note, _dim:false })
+      }
+      return rows
+    }
+    function renderKline(bars) {
+      if (!klineEl.value || !bars || !bars.length) return
+      if (!klineChart) klineChart = echarts.init(klineEl.value)
+      const closes = bars.map(b=>b.close)
+      const ma = (n) => closes.map((_,i)=> i<n-1 ? null : closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n)
+      klineChart.setOption({
+        backgroundColor:'transparent', tooltip:{trigger:'axis'},
+        grid:{left:50,right:20,top:20,bottom:30},
+        xAxis:{type:'category',data:bars.map(b=>b.date),axisLine:{lineStyle:{color:'#30363d'}},axisLabel:{color:'#8b949e'}},
+        yAxis:{scale:true,axisLabel:{color:'#8b949e'},splitLine:{lineStyle:{color:'#21262d'}}},
+        dataZoom:[{type:'inside',start:60,end:100}],
+        series:[
+          {name:'K线',type:'candlestick',data:bars.map(b=>[b.open,b.close,b.low,b.high]),itemStyle:{color:'#f5222d',color0:'#52c41a',borderColor:'#f5222d',borderColor0:'#52c41a'}},
+          {name:'MA5',type:'line',data:ma(5),smooth:true,showSymbol:false,lineStyle:{width:1,color:'#f59e0b'}},
+          {name:'MA10',type:'line',data:ma(10),smooth:true,showSymbol:false,lineStyle:{width:1,color:'#3b82f6'}},
+          {name:'MA20',type:'line',data:ma(20),smooth:true,showSymbol:false,lineStyle:{width:1,color:'#a78bfa'}},
+          {name:'MA60',type:'line',data:ma(60),smooth:true,showSymbol:false,lineStyle:{width:1,color:'#10b981'}}
+        ]
+      })
+      klineChart.resize()
+    }
+    function renderRadar(stock) {
+      if (!radarEl.value || !stock) return
+      if (!radarChart) radarChart = echarts.init(radarEl.value)
+      const dims = stock.dimensions || {}
+      radarChart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { formatter: (p) => p.value ? `${p.name}：${Math.round(p.value)} 分` : '' },
+        radar: {
+          indicator: DIM_ORDER.map(d => ({ name: DIM_NAME[d], max: 100 })),
+          radius: '78%', center: ['50%', '52%'], splitNumber: 5,
+          axisName: { color: '#c9d1d9', fontSize: 12 },
+          axisLine: { lineStyle: { color: '#30363d' } },
+          splitLine: { lineStyle: { color: '#30363d' } },
+          splitArea: { areaStyle: { color: ['#161b22', '#1c2128'] } }
+        },
+        series: [{
+          type: 'radar', symbol: 'circle', symbolSize: 6,
+          data: [{
+            value: DIM_ORDER.map(d => dims[d]?.score ?? 0),
+            name: stock.name || stock.ts_code,
+            areaStyle: { color: 'rgba(59,130,246,.3)' },
+            lineStyle: { color: '#3b82f6', width: 2 },
+            itemStyle: { color: '#60a5fa' }
+          }]
+        }]
+      })
+      // 容器可能刚由隐藏转为显示（尺寸刚从 0 恢复），下一帧再自适应
+      requestAnimationFrame(() => { if (radarChart) radarChart.resize() })
+    }
+
+    async function loadHistory() {
+      try { const d = await api.history(); runs.value = d.runs || [] } catch(e){}
+    }
+    async function doCompare() {
+      try {
+        const d = await api.compare(cmpA.value, cmpB.value)
+        compareRows.value = [...(d.up||[]), ...(d.down||[])].map(r=>({...r, change: r.diff>=0?'上升':'下降'}))
+      } catch(e) { ElMessage.error('对比失败: ' + e.message) }
+    }
+    async function loadSettings() {
+      try { const d = await api.config(); cfgForm.value = { llm:d.llm, tushare:d.tushare } } catch(e){}
+    }
+    async function saveSettings() {
+      try { await api.saveConfig({ llm:cfgForm.value.llm, tushare:cfgForm.value.tushare }); ElMessage.success('设置已保存'); settingsVisible.value=false } catch(e){ ElMessage.error('保存失败: ' + e.message) }
+    }
+
+    // 切换标签页时，等容器有真实尺寸后再绘制/自适应（解决雷达图缩在角落的问题）
+    watch(tab, (v) => {
+      nextTick(() => {
+        if (v === 'kline' && klineChart) klineChart.resize()
+        else if (v === 'radar') renderRadar(detail.value)
+      })
+    })
+
+    onMounted(() => {
+      loadOverview(); loadLatest(); loadSettings(); loadHistory(); setInterval(loadOverview, 15000)
+      // 容器尺寸变化（抽屉/窗口缩放）时自适应
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => {
+          if (klineChart) klineChart.resize()
+          if (radarChart) radarChart.resize()
+        })
+        if (klineEl.value) ro.observe(klineEl.value)
+        if (radarEl.value) ro.observe(radarEl.value)
+      }
+    })
+    onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
+
+    return { indices, top20, summary, latestRun, scanning, scanMsg, progressPct,
+      detailVisible, detail, detailTitle, tab, report, klineEl, radarEl, factorRows,
+      historyVisible, settingsVisible, runs, cmpA, cmpB, compareRows, cfgForm,
+      fmtPct, scoreColor, runLabel, renderMd, startScan, openDetail, doCompare, saveSettings }
+  }
+})
+app.use(ElementPlus)
+app.mount('#app')
+</script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+# xuanFP 配置文件
+# ✅ 本文件不含任何密钥，可安全上传到公开仓库。
+# 🔑 你的真实 API 密钥请填写在本目录下的 config.local.yaml（已被 .gitignore 排除），
+#    或在界面右上角「设置」里填写，程序会自动读取。
+app:
+  host: 127.0.0.1
+  port: 8710
+  debug: false
+
+# Tushare 代理双通道（密钥见 config.local.yaml）
+tushare:
+  pcd:
+    base_url: "https://pcd.mobcvb.cn/tushare/pro"
+    api_key: ""
+  rds:
+    base_url: "http://datahubco.com/app-api/openapi/v1/tushare"
+    api_key: ""
+
+# 东方财富开源实时行情（push2delay 延迟行情域名）
+eastmoney:
+  clist_url: "https://push2delay.eastmoney.com/api/qt/clist/get"
+  stock_url: "https://push2delay.eastmoney.com/api/qt/stock/get"
+  page_size: 100
+
+# 腾讯行情（K线主源 / 实时备选）
+tencent:
+  kline_url: "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+  quote_url: "http://qt.gtimg.cn/q="
+
+# 新浪行情（美股外盘映射 / 实时备选）
+sina:
+  quote_url: "https://hq.sinajs.cn/list="
+
+# LLM 报告生成（DeepSeek / OpenAI 兼容接口；key 留空则使用 Mock 报告）
+llm:
+  base_url: "https://api.deepseek.com/v1"
+  api_key: ""            # 真实 Key 见 config.local.yaml
+  model: "deepseek-chat"
+  timeout: 90
+  top_n_reports: 10      # 为排名前 N 名生成 LLM 报告
+
+# 扫描参数（九大维度权重，合计 100）
+scanner:
+  max_workers: 24        # 并发拉取线程数
+  universe_limit: 0      # 0=全市场；>0 时只扫描前 N 只（用于快速测试）
+  kline_days: 320        # K线拉取天数（覆盖 MA250）
+  moneyflow_days: 5
+  top_list_days: 10
+  margin_days: 30
+  weights:
+    value: 12
+    quality: 18
+    growth: 15
+    trend: 13
+    momentum: 12
+    capital: 13
+    chip: 8
+    safety: 5
+    macro: 4

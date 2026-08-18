@@ -1,0 +1,39 @@
+# ===== 密钥与本地配置（切勿提交）=====
+config.local.yaml
+*.local.yaml
+
+# ===== 本地数据库与缓存 =====
+data/               # SQLite 缓存 + 扫描历史（21MB，非源码）
+*.db
+*.db-journal
+
+# ===== 第三方依赖（体积大，由脚本按需下载，不入库）=====
+pylibs/
+wheels/
+node_modules/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 系统/编辑器 =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.tmp
+.tmp/
+*.tmpdir/
+
+# ===== 前端构建 =====
+frontend/dist/
+frontend/src/
+frontend/package.json
+frontend/vite.config.js
+frontend/index.html
+frontend/.npmrc
+frontend/node_modules/
