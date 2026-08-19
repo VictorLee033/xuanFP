@@ -30,6 +30,9 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
 .drawer-body{padding:4px 4px 24px}
 .chart{width:100%;height:300px}
 .chart-sm{width:100%;height:380px}
+.stat-card{flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px 14px}
+.stat-label{font-size:12px;color:var(--muted);margin-bottom:6px}
+.stat-value{font-size:22px;font-weight:700;color:#e6edf3}
 .clickable{cursor:pointer}
 .md h2{font-size:15px;color:#e6edf3;margin:14px 0 6px;border-left:3px solid var(--accent);padding-left:8px}
 .md h3{font-size:14px;color:#e6edf3;margin:12px 0 4px}
@@ -53,6 +56,7 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
     <div class="spacer"></div>
     <el-button type="primary" size="large" :loading="scanning" @click="startScan">{{ scanning ? '扫描中…' : '🚀 开始扫描' }}</el-button>
     <el-button size="large" @click="historyVisible=true">📊 历史对比</el-button>
+    <el-button size="large" @click="openBacktest">📈 Top5 回测</el-button>
     <el-button size="large" circle @click="settingsVisible=true">⚙</el-button>
   </div>
 
@@ -66,7 +70,7 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
     </div>
 
     <div class="panel">
-      <h3>🏆 综合排名 Top 20
+      <h3>🏆 综合排名 Top 10
         <span v-if="latestRun" style="color:var(--muted);font-weight:400;font-size:12px">（{{ latestRun.stats?.date }} · 覆盖 {{ latestRun.stats?.universe }} 只 · 评分池 {{ latestRun.stats?.pool }} 只 · 耗时 {{ latestRun.stats?.duration }}s）</span>
       </h3>
       <el-table :data="top20" style="width:100%" :header-cell-style="{background:'var(--panel2)',color:'#8b949e'}" @row-click="openDetail" row-class-name="clickable">
@@ -85,10 +89,9 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
             <span class="score-strong">{{ row.score }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="标注" width="120">
+        <el-table-column label="投资建议" width="130">
           <template #default="{ row }">
-            <el-tag v-if="row.score>85" type="warning" effect="dark" size="small">【强烈关注】</el-tag>
-            <span v-else style="color:var(--muted)">—</span>
+            <el-tag :type="adviceType(row.score)" effect="dark" size="small">{{ scoreAdvice(row.score) }}</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -141,6 +144,16 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
   </el-drawer>
 
   <el-dialog v-model="historyVisible" title="扫描历史对比" width="860px">
+    <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <div style="color:var(--muted);font-size:13px;margin-bottom:6px">扫描记录（可删除）</div>
+      <div style="max-height:190px;overflow:auto">
+        <div v-for="r in runs" :key="r.id" style="display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px dashed var(--border)">
+          <span style="flex:1;font-size:13px">{{ runLabel(r) }}</span>
+          <el-button type="danger" size="small" plain @click="deleteRun(r.id)">删除</el-button>
+        </div>
+        <div v-if="!runs.length" style="color:var(--muted);font-size:13px;padding:8px 0">暂无扫描记录</div>
+      </div>
+    </div>
     <div style="display:flex;gap:10px;margin-bottom:12px">
       <el-select v-model="cmpA" placeholder="基准扫描" style="flex:1">
         <el-option v-for="r in runs" :key="r.id" :label="runLabel(r)" :value="r.id" />
@@ -163,6 +176,55 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
         <template #default="{ row }"><el-tag :type="row.diff>=0?'success':'danger'" size="small">{{ row.diff>=0?'上升':'下降' }}</el-tag></template>
       </el-table-column>
     </el-table>
+  </el-dialog>
+
+  <el-dialog v-model="backtestVisible" title="📈 Top5 回测（复盘选股效果）" width="920px">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+      <span style="color:var(--muted)">持有期 N 个交易日：</span>
+      <el-input-number v-model="btN" :min="1" :max="60" size="small" />
+      <el-button type="primary" :loading="btLoading" @click="runBacktest">开始回测</el-button>
+      <span v-if="btResult" style="color:var(--muted);font-size:13px">
+        共 {{ btResult.summary.total_batches }} 批 · {{ btResult.summary.total_records }} 只
+        <template v-if="btResult.summary.skipped">（跳过 {{ btResult.summary.skipped }} 只未满窗口）</template>
+      </span>
+    </div>
+
+    <div v-if="btResult && btResult.summary.avg_ret != null" style="display:flex;gap:14px;margin-bottom:14px">
+      <div class="stat-card">
+        <div class="stat-label">平均收益（N={{ btResult.n }} 天）</div>
+        <div class="stat-value" :style="{color: btResult.summary.avg_ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(btResult.summary.avg_ret) }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">胜率（收益为正占比）</div>
+        <div class="stat-value">{{ btResult.summary.win_rate }}%</div>
+      </div>
+    </div>
+
+    <div v-if="btResult && btResult.timeline.length" style="margin-bottom:14px">
+      <div ref="btChartEl" style="width:100%;height:260px"></div>
+    </div>
+
+    <el-table v-if="btResult && btResult.batches.length" :data="btResult.batches" size="small" max-height="360">
+      <el-table-column prop="trade_date" label="入选日期" width="112" />
+      <el-table-column label="Top5 明细（名称 → N 天收益）" min-width="360">
+        <template #default="{ row }">
+          <div v-for="s in row.records" :key="s.rank" style="display:flex;gap:8px;align-items:center;padding:2px 0">
+            <span style="color:var(--muted);width:18px;text-align:right">{{ s.rank }}</span>
+            <span style="width:120px">{{ s.name }}<span style="color:var(--muted);font-size:12px"> {{ s.ts_code }}</span></span>
+            <el-tag :type="adviceType(s.score)" size="small" effect="plain">{{ scoreAdvice(s.score) }}</el-tag>
+            <span style="margin-left:auto;font-weight:600" :style="{color: s.ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(s.ret) }}</span>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="本批平均" width="120">
+        <template #default="{ row }">
+          <b :style="{color: row.avg_ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(row.avg_ret) }}</b>
+        </template>
+      </el-table-column>
+    </el-table>
+    <div v-else-if="btResult" style="color:var(--muted);font-size:13px;padding:8px 0">
+      暂无完整回测数据 —— 需要先扫描几次、积累走满 N 个交易日的 Top5 记录。
+    </div>
   </el-dialog>
 
   <el-dialog v-model="settingsVisible" title="设置" width="640px">
@@ -190,6 +252,7 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
 <script>
 const { ref, computed, onMounted, onBeforeUnmount, nextTick, watch, createApp } = Vue
 const ElMessage = ElementPlus.ElMessage
+const ElMessageBox = ElementPlus.ElMessageBox
 
 const DIM_ORDER = ['value','quality','growth','trend','momentum','capital','chip','safety','macro']
 const DIM_NAME = { value:'价值估值', quality:'资产质量', growth:'盈利成长', trend:'趋势技术面', momentum:'量价动能', capital:'主力资金流', chip:'筹码与情绪', safety:'安全边际', macro:'景气与宏观' }
@@ -209,7 +272,10 @@ const api = {
   marketOverview: () => api.req('/api/market/overview'),
   stockDetail: (code, runId) => api.req('/api/stocks/' + code + '/detail?run_id=' + (runId||'')),
   history: () => api.req('/api/history'),
-  compare: (a,b) => api.req('/api/history/compare?a='+a+'&b='+b)
+  compare: (a,b) => api.req('/api/history/compare?a='+a+'&b='+b),
+  deleteRun: (id) => api.req('/api/history/'+id, { method:'DELETE' }),
+  backtestRecords: () => api.req('/api/backtest/records'),
+  backtest: (n) => api.req('/api/backtest?n='+n)
 }
 
 const app = createApp({
@@ -236,14 +302,22 @@ const app = createApp({
     const cmpA = ref(null)
     const cmpB = ref(null)
     const compareRows = ref([])
+    const backtestVisible = ref(false)
+    const btN = ref(5)
+    const btLoading = ref(false)
+    const btResult = ref(null)
+    const btChartEl = ref(null)
     const cfgForm = ref({ llm:{base_url:'',api_key:'',model:'',top_n_reports:10}, tushare:{pcd_api_key:'',rds_api_key:''} })
 
     let pollTimer = null
     let klineChart = null
     let radarChart = null
+    let btChart = null
 
     const fmtPct = (v) => (v==null ? '—' : (v>0?'+':'') + Number(v).toFixed(2) + '%')
     const scoreColor = (s) => s>85 ? '#f59e0b' : s>70 ? '#3b82f6' : s>60 ? '#10b981' : '#6b7280'
+    const scoreAdvice = (s) => s>=85 ? '建议加仓' : s>=75 ? '建议买入' : s>=65 ? '建议持有' : s>=55 ? '建议观望' : '建议回避'
+    const adviceType = (s) => s>=85 ? 'success' : s>=75 ? 'success' : s>=65 ? 'primary' : s>=55 ? 'warning' : 'danger'
     const runLabel = (r) => { const d = r.stats?.date || new Date(r.created_at*1000).toLocaleDateString(); return '#'+r.id+' '+d+'（池 '+(r.passed_size ?? '-')+'）' }
 
     function renderMd(text) {
@@ -362,11 +436,52 @@ const app = createApp({
     async function loadHistory() {
       try { const d = await api.history(); runs.value = d.runs || [] } catch(e){}
     }
+    async function deleteRun(runId) {
+      try {
+        await ElMessageBox.confirm('确定删除这次扫描记录吗？删除后不可恢复（含该次的股票得分与 AI 报告）。', '删除确认', { confirmButtonText:'删除', cancelButtonText:'取消', type:'warning' })
+        await api.deleteRun(runId)
+        ElMessage.success('已删除')
+        runs.value = runs.value.filter(r => r.id !== runId)
+        await loadLatest()
+      } catch(e) { if (e !== 'cancel' && e !== 'close') ElMessage.error('删除失败: ' + e.message) }
+    }
     async function doCompare() {
       try {
         const d = await api.compare(cmpA.value, cmpB.value)
         compareRows.value = [...(d.up||[]), ...(d.down||[])].map(r=>({...r, change: r.diff>=0?'上升':'下降'}))
       } catch(e) { ElMessage.error('对比失败: ' + e.message) }
+    }
+    async function openBacktest() {
+      backtestVisible.value = true
+    }
+    async function runBacktest() {
+      btLoading.value = true
+      try {
+        const d = await api.backtest(btN.value)
+        btResult.value = d
+        await nextTick()
+        renderBtChart()
+      } catch(e) { ElMessage.error('回测失败: ' + e.message) }
+      finally { btLoading.value = false }
+    }
+    function renderBtChart() {
+      const tl = btResult.value?.timeline || []
+      if (!btChartEl.value || !tl.length) return
+      if (!btChart) btChart = echarts.init(btChartEl.value)
+      const up = '#f5222d', down = '#52c41a'
+      btChart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { trigger:'axis', formatter: (p) => { const x = p[0]; return x.axisValue + '：' + (x.data>=0?'+':'') + x.data + '%' } },
+        grid: { left:60, right:24, top:24, bottom:34 },
+        xAxis: { type:'category', data: tl.map(t=>t.date), axisLine:{lineStyle:{color:'#30363d'}}, axisLabel:{color:'#8b949e'} },
+        yAxis: { type:'value', axisLabel:{color:'#8b949e', formatter:'{value}%'}, splitLine:{lineStyle:{color:'#21262d'}} },
+        series: [{
+          name:'每批平均收益', type:'line', data: tl.map(t=>t.avg_ret), smooth:true, symbol:'circle', symbolSize:7,
+          lineStyle:{color:'#3b82f6',width:2}, itemStyle:{ color:(p)=> p.value>=0 ? up : down },
+          markLine: { silent:true, symbol:'none', data:[{yAxis:0}], lineStyle:{color:'#8b949e',type:'dashed'} }
+        }]
+      })
+      btChart.resize()
     }
     async function loadSettings() {
       try { const d = await api.config(); cfgForm.value = { llm:d.llm, tushare:d.tushare } } catch(e){}
@@ -390,17 +505,25 @@ const app = createApp({
         const ro = new ResizeObserver(() => {
           if (klineChart) klineChart.resize()
           if (radarChart) radarChart.resize()
+          if (btChart) btChart.resize()
         })
         if (klineEl.value) ro.observe(klineEl.value)
         if (radarEl.value) ro.observe(radarEl.value)
+        if (btChartEl.value) ro.observe(btChartEl.value)
       }
     })
-    onBeforeUnmount(() => { if (pollTimer) clearInterval(pollTimer) })
+    onBeforeUnmount(() => {
+      if (pollTimer) clearInterval(pollTimer)
+      if (klineChart) klineChart.dispose()
+      if (radarChart) radarChart.dispose()
+      if (btChart) btChart.dispose()
+    })
 
     return { indices, top20, summary, latestRun, scanning, scanMsg, progressPct,
       detailVisible, detail, detailTitle, tab, report, klineEl, radarEl, factorRows,
       historyVisible, settingsVisible, runs, cmpA, cmpB, compareRows, cfgForm,
-      fmtPct, scoreColor, runLabel, renderMd, startScan, openDetail, doCompare, saveSettings }
+      backtestVisible, btN, btLoading, btResult, btChartEl,
+      fmtPct, scoreColor, scoreAdvice, adviceType, runLabel, renderMd, startScan, openDetail, doCompare, deleteRun, openBacktest, runBacktest, saveSettings }
   }
 })
 app.use(ElementPlus)
