@@ -39,7 +39,7 @@ llm:
   timeout: 90
   top_n_reports: 10      # 为排名前 N 名生成 LLM 报告
 
-# 扫描参数（九大维度权重，合计 100）
+# 扫描参数
 scanner:
   max_workers: 24        # 并发拉取线程数
   universe_limit: 0      # 0=全市场；>0 时只扫描前 N 只（用于快速测试）
@@ -47,13 +47,15 @@ scanner:
   moneyflow_days: 5
   top_list_days: 10
   margin_days: 30
+  # 九大维度权重（合计 100，按「数据可靠性优先 + 风格均衡」重构）
+  # 维度内各因子权重见 backend/domain/scanner/factors.py 的 FACTOR_WEIGHTS
   weights:
-    value: 12
-    quality: 18
-    growth: 15
-    trend: 13
-    momentum: 12
-    capital: 13
-    chip: 8
-    safety: 5
-    macro: 4
+    value: 13      # 价值估值（财报+快照，可靠）
+    quality: 16    # 资产质量（财报，最可靠）
+    growth: 15     # 盈利成长（财报，最可靠）
+    trend: 11      # 趋势技术面（K线，可靠）
+    momentum: 10   # 量价动能（K线+快照，可靠）
+    capital: 11    # 主力资金流（资金流+龙虎榜，较可靠）
+    chip: 12       # 情绪（筹码分布+综合情绪因子，权重放大）
+    safety: 7      # 安全边际（K线，可靠）
+    macro: 5       # 景气与宏观（行业+外盘映射，粗粒度）
