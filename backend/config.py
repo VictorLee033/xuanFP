@@ -10,7 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("XUANFP_CONFIG", PROJECT_ROOT / "config.yaml"))
 LOCAL_CONFIG_PATH = PROJECT_ROOT / "config.local.yaml"   # 本地私有配置（含密钥，不入库）
 DATA_DIR = PROJECT_ROOT / "data"
-CACHE_DB = DATA_DIR / "xuanfp.db"
+# 数据库路径可用环境变量覆盖（默认 data/xuanfp_data.db）
+# 注：旧版本使用的 xuanfp.db 因历史 ACL 锁定已废弃，改用新文件名避免只读问题
+CACHE_DB = Path(os.environ.get("XUANFP_DB", DATA_DIR / "xuanfp_data.db"))
 
 _lock = threading.RLock()
 _mem_cfg = None  # 内存缓存：设置页更新后即时生效

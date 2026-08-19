@@ -5,7 +5,7 @@ import json
 import requests
 
 from ..config import get_config
-from ..scanner.scoring import DIM_NAMES  # noqa: F401  (保留引用)
+from ..domain.scanner.scoring import DIM_NAMES
 
 
 def _llm_config():
