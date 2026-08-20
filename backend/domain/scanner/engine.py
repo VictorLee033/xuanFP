@@ -13,7 +13,7 @@
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime
 
 from ...errors import DataSourceError
 from ...datasources.news import stock_news
@@ -84,6 +84,19 @@ class ScanEngine:
             self.cache_repo.set(key, val, ttl)
         return val
 
+    def _in_record_window(self, mode, minutes) -> bool:
+        """是否处于该模式的标准记录时点窗口（如短线 14:20-14:35）。"""
+        wins = self.cfg.get("record_windows") or {}
+        w = wins.get(mode)
+        if not w:
+            return False
+
+        def to_min(t):
+            h, m = (int(x) for x in t.split(":"))
+            return h * 60 + m
+
+        return to_min(w[0]) <= minutes <= to_min(w[1])
+
     # ------------------------------------------------------------------
     def run(self):
         t0 = time.time()
@@ -114,6 +127,7 @@ class ScanEngine:
         # ---------- 阶段1：硬性剔除 ----------
         excluded = {}
         kept1 = []
+        pe_max = float(self.cfg.get("pe_max", filters.MAX_PE_TTM))  # 短线模式可放宽
         for code in universe:
             snap = snap_map[code]
             ex, reason, ws = filters.check_hard_exclusion(snap)
@@ -122,8 +136,8 @@ class ScanEngine:
                 excluded[code] = reason
                 continue
             pe = snap.get("pe_ttm")
-            if pe is not None and not (0 < pe < filters.MAX_PE_TTM):
-                excluded[code] = f"PE-TTM={pe:.1f} 超出(0,{filters.MAX_PE_TTM:.0f})"
+            if pe is not None and not (0 < pe < pe_max):
+                excluded[code] = f"PE-TTM={pe:.1f} 超出(0,{pe_max:.0f})"
                 continue
             kept1.append(code)
         self._progress("exclude", len(kept1), len(universe),
@@ -150,7 +164,7 @@ class ScanEngine:
         for code in kept1:
             fin_rows = fin_map.get(code) or []
             pe = snap_map[code].get("pe_ttm")
-            passed, reason, ws = filters.check_financial_gate(fin_rows, pe)
+            passed, reason, ws = filters.check_financial_gate(fin_rows, pe, pe_max)
             warnings.extend(ws)
             if passed:
                 kept2.append(code)
@@ -175,6 +189,14 @@ class ScanEngine:
         kline_map = self._batch(kline_items, lambda c: self.tx.kline(c, days=kline_days),
                                 workers=int(self.cfg.get("max_workers", 24)),
                                 phase="kline", label="K线")
+
+        # 历史时点回放（as_of）：把K线截断到目标日，用于重建历史批次（种子数据）
+        as_of = str(self.cfg.get("as_of") or "")
+        if as_of:
+            bench = [b for b in bench if b["date"] <= as_of]
+            for _c in kline_map:
+                bars = kline_map.get(_c) or []
+                kline_map[_c] = [b for b in bars if b["date"] <= as_of]
 
         # ---------- 补充数据：分红/北向/股东户数/两融（按股票）+ 机构龙虎榜（按交易日） ----------
         workers = int(self.cfg.get("max_workers", 24))
@@ -286,16 +308,16 @@ class ScanEngine:
                 s["dims"][dim]["score"] = (round(scoring.percentile_rank(vals, r), 2)
                                             if r is not None and vals else None)
 
-        # 综合分（加权合成百分位维度分）
-        # 先算「原始综合分」，再对整个评分池做一次百分位校准：
-        # 保证综合分分布均匀、Top 股票能进高阈值档（建议加仓 ≥85 等）。
+        # 综合分（加权合成百分位维度分）+ 头部非线性拉伸
+        # 先算「原始综合分」（九维百分位加权平均），再做头部温和拉伸：
+        # 中低分保持原样，>50 的头部拉开，使第1名≈88~93、头部名次明显拉开、
+        # 且不再像最终百分位那样虚高到 99/100。
         for s in staged:
             s["combined_raw"] = scoring.combine(s["dims"], self.weights)
 
-        raw_pool = [s["combined_raw"] for s in staged if s["combined_raw"] is not None]
+        beta = float(self.cfg.get("stretch_beta", scoring.STRETCH_BETA))
         for s in staged:
-            s["combined"] = (round(scoring.percentile_rank(raw_pool, s["combined_raw"]), 2)
-                             if s["combined_raw"] is not None and raw_pool else None)
+            s["combined"] = scoring.stretch_score(s["combined_raw"], beta)
 
         results = []
         scored = 0
@@ -317,6 +339,7 @@ class ScanEngine:
                 "factors": s["factors"],
                 "missing_count": s["missing_count"],
                 "flags": (["强烈关注"] if combined > 85 else []),
+                "atr_pct": (s["factors"].get("g15") or {}).get("value"),  # 次日止盈/止损用
             })
             scored += 1
         self._progress("score", scored, len(pool), f"评分完成 {scored} 只")
@@ -324,11 +347,13 @@ class ScanEngine:
         results.sort(key=lambda r: r["score"], reverse=True)
 
         # ---------- 阶段4：输出与存档 ----------
-        top20 = [{k: r[k] for k in ("ts_code", "name", "industry", "sw_industry", "price", "score", "flags")}
+        top20 = [{k: r[k] for k in ("ts_code", "name", "industry", "sw_industry", "price",
+                                    "score", "flags", "atr_pct")}
                  for r in results[:10]]
         summary = self._build_summary(results, len(universe), len(pool), warnings)
 
-        run_id = self.scan_repo.create_run(status="done", universe_size=len(universe))
+        run_id = self.scan_repo.create_run(status="done", universe_size=len(universe),
+                                           mode=str(self.cfg.get("mode", "normal")))
         self.scan_repo.update_run(
             run_id,
             passed_size=len(pool), top20=top20, summary=summary,
@@ -344,28 +369,34 @@ class ScanEngine:
                 r["factors"], r["flags"],
             )
 
-        # 自动记录 Top5 到回测库（同一天多次扫描 → 只保留最后一次）
+        # 自动记录 Top10 到回测库（仅标准时点窗口：短线14:20-14:35 / 标准15:00-15:20；
+        # as_of 回放时直接按目标日入库，供种子数据重建）
         if self.top5_repo is not None:
             try:
-                self.top5_repo.replace_day(date.today().isoformat(), [
-                    {
-                        "rank": i + 1,
-                        "ts_code": r["ts_code"],
-                        "name": r["name"],
-                        "close_price": r["price"],
-                        "pct_chg": r.get("pct_chg"),
-                        "amount": r.get("amount"),
-                        "total_mv": r.get("total_mv"),
-                        "score": r["score"],
-                        "industry": r.get("industry"),
-                        "sw_industry": r.get("sw_industry"),
-                        "tags": r.get("flags") or [],
-                        "dimensions": {d: v.get("score") for d, v in (r.get("dimensions") or {}).items()},
-                    }
-                    for i, r in enumerate(results[:5])
-                ])
+                mode = str(self.cfg.get("mode", "normal"))
+                now = datetime.now()
+                minutes = now.hour * 60 + now.minute
+                if self.cfg.get("as_of") or self._in_record_window(mode, minutes):
+                    trade_date = str(self.cfg.get("as_of") or date.today().isoformat())
+                    self.top5_repo.replace(trade_date, mode, [
+                        {
+                            "rank": i + 1,
+                            "ts_code": r["ts_code"],
+                            "name": r["name"],
+                            "close_price": r["price"],
+                            "pct_chg": r.get("pct_chg"),
+                            "amount": r.get("amount"),
+                            "total_mv": r.get("total_mv"),
+                            "score": r["score"],
+                            "industry": r.get("industry"),
+                            "sw_industry": r.get("sw_industry"),
+                            "tags": r.get("flags") or [],
+                            "dimensions": {d: v.get("score") for d, v in (r.get("dimensions") or {}).items()},
+                        }
+                        for i, r in enumerate(results[:10])
+                    ])
             except Exception as e:  # noqa: BLE001
-                logger.warning("Top5 回测记录失败: %s", e)
+                logger.warning("回测库 Top10 记录失败: %s", e)
 
         logger.info("扫描完成: run=%s universe=%s pool=%s 耗时=%.1fs",
                     run_id, len(universe), len(pool), time.time() - t0)

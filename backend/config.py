@@ -34,6 +34,12 @@ _defaults = {
                 "top_list_days": 10, "margin_days": 30,
                 "weights": {"value": 12, "quality": 18, "growth": 15, "trend": 13,
                             "momentum": 12, "capital": 13, "chip": 8, "safety": 5, "macro": 4}},
+    "presets": {"short": {"label": "短线", "pe_max": 300,
+                          "weights": {"value": 5, "quality": 8, "growth": 8, "trend": 18,
+                                      "momentum": 16, "capital": 16, "chip": 16,
+                                      "safety": 8, "macro": 5}}},
+    "mail": {"smtp_host": "smtp.qq.com", "smtp_port": 465,
+             "sender": "", "auth_code": "", "recipient": ""},
 }
 
 
@@ -80,15 +86,50 @@ def get_config() -> dict:
     return load_config()
 
 
+_SECRET_KEYS = {"api_key", "auth_code"}
+
+
+def _strip_secrets(node):
+    """递归剔除密钥字段值（置空），防止真实密钥被写回公共 config.yaml。"""
+    if isinstance(node, dict):
+        return {k: ("" if k in _SECRET_KEYS else _strip_secrets(v)) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_strip_secrets(x) for x in node]
+    return node
+
+
 def update_config(partial: dict) -> dict:
-    """部分更新配置并落盘，返回新配置"""
+    """更新**公共配置**并落盘到 config.yaml（自动剔除密钥字段，密钥只进 local 文件）。"""
     global _mem_cfg
     with _lock:
-        cfg = load_config()
-        cfg = _deep_merge(cfg, partial)
-        save_config(cfg)
-        _mem_cfg = cfg
-        return cfg
+        file_cfg = {}
+        if CONFIG_PATH.exists():
+            try:
+                file_cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            except Exception:
+                file_cfg = {}
+        merged = _deep_merge(_strip_secrets(file_cfg), partial)
+        CONFIG_PATH.write_text(yaml.safe_dump(merged, allow_unicode=True, sort_keys=False),
+                               encoding="utf-8")
+        _mem_cfg = None
+        return load_config()
+
+
+def update_local_config(partial: dict) -> dict:
+    """更新**本地私有配置**（config.local.yaml，含密钥，不入库），返回新配置。"""
+    global _mem_cfg
+    with _lock:
+        local = {}
+        if LOCAL_CONFIG_PATH.exists():
+            try:
+                local = yaml.safe_load(LOCAL_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            except Exception:
+                local = {}
+        local = _deep_merge(local, partial)
+        LOCAL_CONFIG_PATH.write_text(yaml.safe_dump(local, allow_unicode=True, sort_keys=False),
+                                     encoding="utf-8")
+        _mem_cfg = None
+        return load_config()
 
 
 def ensure_data_dir():

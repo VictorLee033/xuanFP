@@ -12,9 +12,9 @@ from .datasources.fundamentals import FundamentalsClient
 from .domain.scanner.engine import ScanEngine
 from .llm import reporter
 from .repositories import (Database, CacheRepository, ScanRepository,
-                           ReportRepository, Top5Repository)
+                           ReportRepository, Top10Repository, PushRepository)
 from .services import (BacktestService, HistoryService, MarketService,
-                       ScanService)
+                       PushService, ScanService)
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,8 @@ class Container:
         self.cache_repo = CacheRepository(self.db)
         self.scan_repo = ScanRepository(self.db)
         self.report_repo = ReportRepository(self.db)
-        self.top5_repo = Top5Repository(self.db)
+        self.top5_repo = Top10Repository(self.db)
+        self.push_repo = PushRepository(self.db)
 
         # 外部数据源（轻量、按需重读配置）
         self.em = EastMoneyClient()
@@ -45,13 +46,28 @@ class Container:
             reporter=reporter,
             top_n_provider=lambda: cfg.get_config()["llm"].get("top_n_reports", 10),
         )
+        self.push = PushService(
+            push_repo=self.push_repo,
+            scan_repo=self.scan_repo,
+            cache_repo=self.cache_repo,
+            build_engine=self._build_engine,
+        )
 
-    def _build_engine(self, progress) -> ScanEngine:
+    def _build_engine(self, progress, mode: str = "normal") -> ScanEngine:
         c = cfg.get_config()
+        sc = dict(c["scanner"])
+        sc["mode"] = mode
+        weights = c["scanner"]["weights"]
+        if mode and mode != "normal":
+            preset = (c.get("presets") or {}).get(mode) or {}
+            if preset.get("weights"):
+                weights = preset["weights"]
+            if preset.get("pe_max"):
+                sc["pe_max"] = preset["pe_max"]
         return ScanEngine(
             em=self.em, tx=self.tx, fund=self.fund,
             cache_repo=self.cache_repo, scan_repo=self.scan_repo,
-            weights=c["scanner"]["weights"], scanner_cfg=c["scanner"],
+            weights=weights, scanner_cfg=sc,
             progress=progress, top5_repo=self.top5_repo,
         )
 

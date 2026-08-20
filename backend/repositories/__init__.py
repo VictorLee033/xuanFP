@@ -4,7 +4,8 @@ from .database import Database
 from .cache_repo import CacheRepository
 from .scan_repo import ScanRepository
 from .report_repo import ReportRepository
-from .top5_repo import Top5Repository
+from .top5_repo import Top10Repository
+from .push_repo import PushRepository
 
 __all__ = ["Database", "CacheRepository", "ScanRepository", "ReportRepository",
-           "Top5Repository"]
+           "Top10Repository", "PushRepository"]

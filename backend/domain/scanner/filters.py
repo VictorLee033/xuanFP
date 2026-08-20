@@ -40,8 +40,9 @@ def check_hard_exclusion(snapshot):
     return False, "", warnings
 
 
-def check_financial_gate(fin_rows, pe_ttm):
+def check_financial_gate(fin_rows, pe_ttm, pe_max=MAX_PE_TTM):
     """财务入围门槛。fin_rows: 数据中心财务（report_date 降序）
+    pe_max: PE-TTM 上限（短线模式可放宽）。
     返回 (passed, reason, warnings[])
     """
     warnings = []
@@ -59,8 +60,8 @@ def check_financial_gate(fin_rows, pe_ttm):
     latest_annual = annual[0] if annual else latest
 
     pe = num(pe_ttm)
-    if pe is not None and not (0 < pe < MAX_PE_TTM):
-        return False, f"PE-TTM={pe:.1f} 不在 (0,{MAX_PE_TTM:.0f})", warnings
+    if pe is not None and not (0 < pe < pe_max):
+        return False, f"PE-TTM={pe:.1f} 不在 (0,{pe_max:.0f})", warnings
 
     roe = num(latest_annual.get("roe"))
     if roe is None:

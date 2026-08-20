@@ -16,10 +16,11 @@ class ScanRepository:
         self.db = db
 
     # ---------- 运行记录 ----------
-    def create_run(self, status: str = "running", universe_size: int | None = None) -> int:
+    def create_run(self, status: str = "running", universe_size: int | None = None,
+                   mode: str = "normal") -> int:
         return self.db.execute(
-            "INSERT INTO scan_runs (created_at, status, universe_size) VALUES (?,?,?)",
-            (time.time(), status, universe_size),
+            "INSERT INTO scan_runs (created_at, status, universe_size, mode) VALUES (?,?,?,?)",
+            (time.time(), status, universe_size, mode),
         )
 
     def update_run(self, run_id: int, **fields) -> None:
@@ -53,7 +54,7 @@ class ScanRepository:
 
     def list_runs(self, limit: int = 50):
         rows = self.db.query_all(
-            "SELECT id, created_at, status, universe_size, passed_size, summary, stats "
+            "SELECT id, created_at, status, universe_size, passed_size, mode, summary, stats "
             "FROM scan_runs ORDER BY id DESC LIMIT ?",
             (limit,),
         )

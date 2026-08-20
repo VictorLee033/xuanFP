@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>xuanFP · 智能股票工作台</title>
 <link rel="stylesheet" href="/vendor/element-plus.css" />
 <link rel="stylesheet" href="/vendor/element-plus.dark.css" />
@@ -54,9 +57,13 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
       </div>
     </div>
     <div class="spacer"></div>
+    <el-switch v-model="shortMode" active-text="⚡短线" inactive-text="综合" inline-prompt
+               style="--el-switch-on-color:#d35400" title="短线模式：趋势/量价/资金/情绪权重，PE上限放宽到300" />
     <el-button type="primary" size="large" :loading="scanning" @click="startScan">{{ scanning ? '扫描中…' : '🚀 开始扫描' }}</el-button>
-    <el-button size="large" @click="historyVisible=true">📊 历史对比</el-button>
-    <el-button size="large" @click="openBacktest">📈 Top5 回测</el-button>
+    <el-button size="large" :type="pushScheduled ? 'warning' : 'default'" @click="schedulePush" title="安排次日14:25自动短线扫描并发邮件">📮明日推送</el-button>
+    <el-button size="large" @click="previewPush" :loading="pushPreviewing" title="立即手动触发一次短线扫描+发邮件">🔔立即预演</el-button>
+    <el-button size="large" @click="openHistory">📊 历史对比</el-button>
+    <el-button size="large" @click="openBacktest">📈 Top10 回测</el-button>
     <el-button size="large" circle @click="settingsVisible=true">⚙</el-button>
   </div>
 
@@ -93,6 +100,12 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
           <template #default="{ row }">
             <el-tag :type="adviceType(row.score)" effect="dark" size="small">{{ scoreAdvice(row.score) }}</el-tag>
           </template>
+        </el-table-column>
+        <el-table-column label="次日止盈" width="90" align="right">
+          <template #default="{ row }"><span style="color:var(--up)">{{ stopTarget(row,'target') }}</span></template>
+        </el-table-column>
+        <el-table-column label="次日止损" width="90" align="right">
+          <template #default="{ row }"><span style="color:var(--down)">{{ stopTarget(row,'stop') }}</span></template>
         </el-table-column>
       </el-table>
     </div>
@@ -178,8 +191,12 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
     </el-table>
   </el-dialog>
 
-  <el-dialog v-model="backtestVisible" title="📈 Top5 回测（复盘选股效果）" width="920px">
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+  <el-dialog v-model="backtestVisible" title="📈 Top10 回测（复盘选股效果）" width="980px">
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+      <el-radio-group v-model="btMode" size="default">
+        <el-radio-button label="normal">📊 普通回测</el-radio-button>
+        <el-radio-button label="short">⚡ 短线回测</el-radio-button>
+      </el-radio-group>
       <span style="color:var(--muted)">持有期 N 个交易日：</span>
       <el-input-number v-model="btN" :min="1" :max="60" size="small" />
       <el-button type="primary" :loading="btLoading" @click="runBacktest">开始回测</el-button>
@@ -189,7 +206,7 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
       </span>
     </div>
 
-    <div v-if="btResult && btResult.summary.avg_ret != null" style="display:flex;gap:14px;margin-bottom:14px">
+    <div v-if="btResult && btResult.summary.avg_ret != null" style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
       <div class="stat-card">
         <div class="stat-label">平均收益（N={{ btResult.n }} 天）</div>
         <div class="stat-value" :style="{color: btResult.summary.avg_ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(btResult.summary.avg_ret) }}</div>
@@ -198,32 +215,49 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
         <div class="stat-label">胜率（收益为正占比）</div>
         <div class="stat-value">{{ btResult.summary.win_rate }}%</div>
       </div>
+      <template v-if="btResult.summary.nd">
+        <div class="stat-card">
+          <div class="stat-label">平均卖「次日最高」</div>
+          <div class="stat-value" :style="{color: btResult.summary.nd.avg_high>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(btResult.summary.nd.avg_high) }}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">平均卖「次日收盘」</div>
+          <div class="stat-value" :style="{color: btResult.summary.nd.avg_close>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(btResult.summary.nd.avg_close) }}</div>
+        </div>
+      </template>
     </div>
 
     <div v-if="btResult && btResult.timeline.length" style="margin-bottom:14px">
       <div ref="btChartEl" style="width:100%;height:260px"></div>
     </div>
 
-    <el-table v-if="btResult && btResult.batches.length" :data="btResult.batches" size="small" max-height="360">
-      <el-table-column prop="trade_date" label="入选日期" width="112" />
-      <el-table-column label="Top5 明细（名称 → N 天收益）" min-width="360">
-        <template #default="{ row }">
-          <div v-for="s in row.records" :key="s.rank" style="display:flex;gap:8px;align-items:center;padding:2px 0">
-            <span style="color:var(--muted);width:18px;text-align:right">{{ s.rank }}</span>
-            <span style="width:120px">{{ s.name }}<span style="color:var(--muted);font-size:12px"> {{ s.ts_code }}</span></span>
-            <el-tag :type="adviceType(s.score)" size="small" effect="plain">{{ scoreAdvice(s.score) }}</el-tag>
-            <span style="margin-left:auto;font-weight:600" :style="{color: s.ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(s.ret) }}</span>
-          </div>
-        </template>
+    <el-table v-if="btRows.length" :data="btRows" size="small" max-height="400">
+      <el-table-column prop="trade_date" label="入选日期" width="100" />
+      <el-table-column prop="rank" label="排名" width="60" align="center" />
+      <el-table-column label="名称" min-width="130">
+        <template #default="{ row }">{{ row.name }}<span style="color:var(--muted);font-size:12px"> {{ row.ts_code }}</span></template>
       </el-table-column>
-      <el-table-column label="本批平均" width="120">
-        <template #default="{ row }">
-          <b :style="{color: row.avg_ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(row.avg_ret) }}</b>
-        </template>
+      <el-table-column label="得分" width="70" align="right">
+        <template #default="{ row }"><b>{{ row.score }}</b></template>
+      </el-table-column>
+      <el-table-column label="建议" width="100">
+        <template #default="{ row }"><el-tag :type="adviceType(row.score)" size="small" effect="plain">{{ scoreAdvice(row.score) }}</el-tag></template>
+      </el-table-column>
+      <el-table-column label="N天收益" width="100" align="right">
+        <template #default="{ row }"><b :style="{color: row.ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ fmtPct(row.ret) }}</b></template>
+      </el-table-column>
+      <el-table-column label="次日开盘" width="90" align="right">
+        <template #default="{ row }"><span :style="{color: row.open_ret!=null && row.open_ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ row.open_ret!=null ? fmtPct(row.open_ret) : '—' }}</span></template>
+      </el-table-column>
+      <el-table-column label="次日最高" width="90" align="right">
+        <template #default="{ row }"><span :style="{color: row.high_ret!=null && row.high_ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ row.high_ret!=null ? fmtPct(row.high_ret) : '—' }}</span></template>
+      </el-table-column>
+      <el-table-column label="次日收盘" width="90" align="right">
+        <template #default="{ row }"><span :style="{color: row.close_ret!=null && row.close_ret>=0 ? 'var(--up)' : 'var(--down)'}">{{ row.close_ret!=null ? fmtPct(row.close_ret) : '—' }}</span></template>
       </el-table-column>
     </el-table>
     <div v-else-if="btResult" style="color:var(--muted);font-size:13px;padding:8px 0">
-      暂无完整回测数据 —— 需要先扫描几次、积累走满 N 个交易日的 Top5 记录。
+      暂无完整回测数据 —— 该模式还没有走满 N 个交易日的记录（标准15:00 / 短线14:25 会自动积累）。
     </div>
   </el-dialog>
 
@@ -237,6 +271,10 @@ html,body,#app{margin:0;padding:0;height:100%;background:var(--bg);color:var(--t
       <el-divider content-position="left">Tushare 数据通道</el-divider>
       <el-form-item label="PCD API Key"><el-input v-model="cfgForm.tushare.pcd_api_key" /></el-form-item>
       <el-form-item label="RDS API Key"><el-input v-model="cfgForm.tushare.rds_api_key" /></el-form-item>
+      <el-divider content-position="left">📮 邮件推送（14:25 短线榜单）</el-divider>
+      <el-form-item label="发件邮箱"><el-input v-model="cfgForm.mail.sender" placeholder="如 123456@qq.com" /></el-form-item>
+      <el-form-item label="SMTP 授权码"><el-input v-model="cfgForm.mail.auth_code" type="password" show-password placeholder="QQ邮箱→设置→账户→开启SMTP服务生成授权码" /></el-form-item>
+      <el-form-item label="收件邮箱"><el-input v-model="cfgForm.mail.recipient" placeholder="接收榜单的邮箱（可=发件邮箱）" /></el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="settingsVisible=false">取消</el-button>
@@ -265,7 +303,7 @@ const api = {
   },
   config: () => api.req('/api/config'),
   saveConfig: (b) => api.req('/api/config', { method:'PUT', body:JSON.stringify(b) }),
-  startScan: () => api.req('/api/scan', { method:'POST' }),
+  startScan: (mode) => api.req('/api/scan', { method:'POST', body:JSON.stringify({mode: mode || 'normal'}) }),
   scanProgress: () => api.req('/api/scan/progress'),
   scanResult: (id) => api.req('/api/scan/' + id),
   latestScan: () => api.req('/api/scan/latest'),
@@ -275,7 +313,11 @@ const api = {
   compare: (a,b) => api.req('/api/history/compare?a='+a+'&b='+b),
   deleteRun: (id) => api.req('/api/history/'+id, { method:'DELETE' }),
   backtestRecords: () => api.req('/api/backtest/records'),
-  backtest: (n) => api.req('/api/backtest?n='+n)
+  backtest: (n, mode) => api.req('/api/backtest?n='+n+'&mode='+(mode||'normal')),
+  pushSchedule: () => api.req('/api/push/schedule', { method:'POST' }),
+  pushCancel: () => api.req('/api/push/cancel', { method:'POST' }),
+  pushPreview: () => api.req('/api/push/preview', { method:'POST' }),
+  pushStatus: () => api.req('/api/push/status')
 }
 
 const app = createApp({
@@ -304,12 +346,17 @@ const app = createApp({
     const compareRows = ref([])
     const backtestVisible = ref(false)
     const btN = ref(5)
+    const btMode = ref('normal')
     const btLoading = ref(false)
     const btResult = ref(null)
     const btChartEl = ref(null)
-    const cfgForm = ref({ llm:{base_url:'',api_key:'',model:'',top_n_reports:10}, tushare:{pcd_api_key:'',rds_api_key:''} })
+    const shortMode = ref(localStorage.getItem('xuanfp_mode') === 'short')
+    const pushScheduled = ref(false)
+    const pushPreviewing = ref(false)
+    const cfgForm = ref({ llm:{base_url:'',api_key:'',model:'',top_n_reports:10}, tushare:{pcd_api_key:'',rds_api_key:''}, mail:{smtp_host:'',smtp_port:465,sender:'',auth_code:'',recipient:''} })
 
     let pollTimer = null
+    let pushTimer = null
     let klineChart = null
     let radarChart = null
     let btChart = null
@@ -318,7 +365,19 @@ const app = createApp({
     const scoreColor = (s) => s>85 ? '#f59e0b' : s>70 ? '#3b82f6' : s>60 ? '#10b981' : '#6b7280'
     const scoreAdvice = (s) => s>=85 ? '建议加仓' : s>=75 ? '建议买入' : s>=65 ? '建议持有' : s>=55 ? '建议观望' : '建议回避'
     const adviceType = (s) => s>=85 ? 'success' : s>=75 ? 'success' : s>=65 ? 'primary' : s>=55 ? 'warning' : 'danger'
-    const runLabel = (r) => { const d = r.stats?.date || new Date(r.created_at*1000).toLocaleDateString(); return '#'+r.id+' '+d+'（池 '+(r.passed_size ?? '-')+'）' }
+    const runLabel = (r) => {
+      const t = r.created_at ? new Date(r.created_at*1000) : new Date()
+      const p = (n) => String(n).padStart(2,'0')
+      const dt = p(t.getMonth()+1) + '-' + p(t.getDate()) + ' ' + p(t.getHours()) + ':' + p(t.getMinutes())
+      const modeTag = r.mode === 'short' ? '⚡短线' : '📊综合'
+      return '#' + (r.seq ?? r.id) + ' ' + dt + ' ' + modeTag + '（池 ' + (r.passed_size ?? '-') + '）'
+    }
+    const stopTarget = (row, kind) => {
+      const p = row.price, a = row.atr_pct
+      if (p == null || a == null) return '—'
+      const v = kind === 'target' ? p*(1+1.5*a/100) : p*(1-a/100)
+      return v.toFixed(2)
+    }
 
     function renderMd(text) {
       if (!text) return ''
@@ -343,8 +402,8 @@ const app = createApp({
     async function startScan() {
       if (scanning.value) return
       try {
-        await api.startScan()
-        scanning.value = true; scanMsg.value = '扫描启动中…'; progressPct.value = 0
+        await api.startScan(shortMode.value ? 'short' : 'normal')
+        scanning.value = true; scanMsg.value = (shortMode.value ? '⚡短线' : '综合') + '模式扫描启动中…'; progressPct.value = 0
         pollTimer = setInterval(pollProgress, 1500)
       } catch(e) { ElMessage.error('启动扫描失败: ' + e.message) }
     }
@@ -353,7 +412,7 @@ const app = createApp({
         const p = await api.scanProgress()
         scanMsg.value = p.message || p.phase
         if (p.total > 0) progressPct.value = Math.round(p.done/p.total*100)
-        if (p.phase === 'done' && !p.running) { clearInterval(pollTimer); scanning.value=false; progressPct.value=100; ElMessage.success('扫描完成！'); await loadLatest() }
+        if (p.phase === 'done' && !p.running) { clearInterval(pollTimer); scanning.value=false; progressPct.value=100; ElMessage.success('扫描完成！'); await loadLatest(); await loadHistory() }
         else if (p.phase === 'failed' && !p.running) { clearInterval(pollTimer); scanning.value=false; ElMessage.error(p.message || '扫描失败') }
       } catch(e){}
     }
@@ -434,14 +493,24 @@ const app = createApp({
     }
 
     async function loadHistory() {
-      try { const d = await api.history(); runs.value = d.runs || [] } catch(e){}
+      try {
+        const d = await api.history()
+        // 按时间从早到晚排序，显示序号按位置连续分配（内部 id 不变）
+        const arr = (d.runs || []).slice().sort((a,b) => (a.created_at||0) - (b.created_at||0))
+        runs.value = arr.map((r,i) => ({...r, seq: i+1}))
+      } catch(e){}
+    }
+    async function openHistory() {
+      historyVisible.value = true
+      await loadHistory()
     }
     async function deleteRun(runId) {
       try {
         await ElMessageBox.confirm('确定删除这次扫描记录吗？删除后不可恢复（含该次的股票得分与 AI 报告）。', '删除确认', { confirmButtonText:'删除', cancelButtonText:'取消', type:'warning' })
         await api.deleteRun(runId)
         ElMessage.success('已删除')
-        runs.value = runs.value.filter(r => r.id !== runId)
+        // 删除后剩余记录保持时间顺序并重新分配连续序号
+        runs.value = runs.value.filter(r => r.id !== runId).map((r,i) => ({...r, seq: i+1}))
         await loadLatest()
       } catch(e) { if (e !== 'cancel' && e !== 'close') ElMessage.error('删除失败: ' + e.message) }
     }
@@ -457,13 +526,21 @@ const app = createApp({
     async function runBacktest() {
       btLoading.value = true
       try {
-        const d = await api.backtest(btN.value)
+        const d = await api.backtest(btN.value, btMode.value)
         btResult.value = d
         await nextTick()
         renderBtChart()
       } catch(e) { ElMessage.error('回测失败: ' + e.message) }
       finally { btLoading.value = false }
     }
+    // 回测表：把批次拍平成「一行一只股票」，各字段横排严格对齐
+    const btRows = computed(() => {
+      const rows = []
+      for (const b of btResult.value?.batches || []) {
+        for (const s of b.records) rows.push({ ...s, trade_date: b.trade_date })
+      }
+      return rows
+    })
     function renderBtChart() {
       const tl = btResult.value?.timeline || []
       if (!btChartEl.value || !tl.length) return
@@ -484,10 +561,60 @@ const app = createApp({
       btChart.resize()
     }
     async function loadSettings() {
-      try { const d = await api.config(); cfgForm.value = { llm:d.llm, tushare:d.tushare } } catch(e){}
+      try {
+        const d = await api.config()
+        cfgForm.value = { llm:d.llm, tushare:d.tushare, mail:{ smtp_host:d.mail?.smtp_host || 'smtp.qq.com', smtp_port:d.mail?.smtp_port || 465, sender:d.mail?.sender || '', auth_code:d.mail?.auth_code || '', recipient:d.mail?.recipient || '' } }
+      } catch(e){}
     }
     async function saveSettings() {
-      try { await api.saveConfig({ llm:cfgForm.value.llm, tushare:cfgForm.value.tushare }); ElMessage.success('设置已保存'); settingsVisible.value=false } catch(e){ ElMessage.error('保存失败: ' + e.message) }
+      try {
+        await api.saveConfig({ llm:cfgForm.value.llm, tushare:cfgForm.value.tushare, mail:cfgForm.value.mail })
+        ElMessage.success('设置已保存'); settingsVisible.value=false
+      } catch(e) { ElMessage.error('保存失败: ' + e.message) }
+    }
+    async function schedulePush() {
+      if (pushScheduled.value) {
+        try {
+          await api.pushCancel()
+          pushScheduled.value = false
+          ElMessage.success('已取消明日推送')
+        } catch(e) { ElMessage.error('取消失败: ' + e.message) }
+        return
+      }
+      try {
+        const d = await api.pushSchedule()
+        pushScheduled.value = true
+        ElMessage.success('已安排 ' + d.target_date + ' ' + d.target_time + ' 自动推送（⚡短线模式）')
+      } catch(e) { ElMessage.error('安排失败: ' + e.message) }
+    }
+    async function previewPush() {
+      try {
+        const d = await api.pushPreview()
+        if (!d.ok) { ElMessage.error(d.error || '预演启动失败'); return }
+        pushPreviewing.value = true
+        ElMessage.info('预演已启动：正在短线扫描并发邮件，约需 1~2 分钟')
+        if (pushTimer) clearInterval(pushTimer)
+        pushTimer = setInterval(checkPushStatus, 15000)
+      } catch(e) { ElMessage.error('预演失败: ' + e.message) }
+    }
+    async function checkPushStatus() {
+      try {
+        const d = await api.pushStatus()
+        pushScheduled.value = d.scheduled
+        pushPreviewing.value = !!d.preview_running
+        if (!d.preview_running && d.last_preview) {
+          if (pushTimer) { clearInterval(pushTimer); pushTimer = null }
+          if (d.last_preview.ok) ElMessage.success('预演完成，邮件已发送，请查收！')
+          else ElMessage.error('预演失败: ' + (d.last_preview.error || '未知错误'))
+        }
+      } catch(e){}
+    }
+    async function loadPushStatus() {
+      try {
+        const d = await api.pushStatus()
+        pushScheduled.value = d.scheduled
+        pushPreviewing.value = !!d.preview_running
+      } catch(e){}
     }
 
     // 切换标签页时，等容器有真实尺寸后再绘制/自适应（解决雷达图缩在角落的问题）
@@ -497,9 +624,11 @@ const app = createApp({
         else if (v === 'radar') renderRadar(detail.value)
       })
     })
+    // 短线模式开关记忆
+    watch(shortMode, (v) => { try { localStorage.setItem('xuanfp_mode', v ? 'short' : 'normal') } catch(e){} })
 
     onMounted(() => {
-      loadOverview(); loadLatest(); loadSettings(); loadHistory(); setInterval(loadOverview, 15000)
+      loadOverview(); loadLatest(); loadSettings(); loadHistory(); loadPushStatus(); setInterval(loadOverview, 15000)
       // 容器尺寸变化（抽屉/窗口缩放）时自适应
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => {
@@ -514,6 +643,7 @@ const app = createApp({
     })
     onBeforeUnmount(() => {
       if (pollTimer) clearInterval(pollTimer)
+      if (pushTimer) clearInterval(pushTimer)
       if (klineChart) klineChart.dispose()
       if (radarChart) radarChart.dispose()
       if (btChart) btChart.dispose()
@@ -522,8 +652,9 @@ const app = createApp({
     return { indices, top20, summary, latestRun, scanning, scanMsg, progressPct,
       detailVisible, detail, detailTitle, tab, report, klineEl, radarEl, factorRows,
       historyVisible, settingsVisible, runs, cmpA, cmpB, compareRows, cfgForm,
-      backtestVisible, btN, btLoading, btResult, btChartEl,
-      fmtPct, scoreColor, scoreAdvice, adviceType, runLabel, renderMd, startScan, openDetail, doCompare, deleteRun, openBacktest, runBacktest, saveSettings }
+      backtestVisible, btN, btMode, btLoading, btResult, btChartEl, btRows,
+      shortMode, pushScheduled, pushPreviewing,
+      fmtPct, scoreColor, scoreAdvice, adviceType, runLabel, stopTarget, renderMd, startScan, openDetail, doCompare, deleteRun, openHistory, openBacktest, runBacktest, schedulePush, previewPush, saveSettings }
   }
 })
 app.use(ElementPlus)

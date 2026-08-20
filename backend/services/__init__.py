@@ -4,5 +4,7 @@ from .scan_service import ScanService
 from .market_service import MarketService
 from .history_service import HistoryService
 from .backtest_service import BacktestService
+from .push_service import PushService
 
-__all__ = ["ScanService", "MarketService", "HistoryService", "BacktestService"]
+__all__ = ["ScanService", "MarketService", "HistoryService", "BacktestService",
+           "PushService"]

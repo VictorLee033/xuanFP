@@ -98,6 +98,60 @@ MIGRATIONS = [
             "CREATE INDEX IF NOT EXISTS idx_top5_date ON top5_records(trade_date)",
         ],
     ),
+    (
+        "0003_mode_push",
+        [
+            "ALTER TABLE scan_runs ADD COLUMN mode TEXT",
+            """
+            CREATE TABLE IF NOT EXISTS push_jobs (
+                id INTEGER PRIMARY KEY,
+                target_date TEXT,
+                target_time TEXT,
+                status TEXT,
+                created_at REAL,
+                last_send_at REAL,
+                last_error TEXT
+            )
+            """,
+        ],
+    ),
+    (
+        "0004_top5_mode",
+        [
+            """
+            CREATE TABLE top5_records_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                ts_code TEXT NOT NULL,
+                name TEXT,
+                close_price REAL,
+                pct_chg REAL,
+                amount REAL,
+                total_mv REAL,
+                score REAL,
+                industry TEXT,
+                sw_industry TEXT,
+                tags TEXT,
+                dimensions TEXT,
+                mode TEXT NOT NULL DEFAULT 'normal',
+                created_at REAL NOT NULL,
+                UNIQUE(trade_date, rank, mode)
+            )
+            """,
+            """
+            INSERT INTO top5_records_new
+                (id, trade_date, rank, ts_code, name, close_price, pct_chg, amount,
+                 total_mv, score, industry, sw_industry, tags, dimensions, mode, created_at)
+            SELECT id, trade_date, rank, ts_code, name, close_price, pct_chg, amount,
+                   total_mv, score, industry, sw_industry, tags, dimensions, 'normal', created_at
+            FROM top5_records
+            """,
+            "DROP TABLE top5_records",
+            "ALTER TABLE top5_records_new RENAME TO top5_records",
+            "CREATE INDEX IF NOT EXISTS idx_top5_date ON top5_records(trade_date)",
+        ],
+    ),
 ]
 
 

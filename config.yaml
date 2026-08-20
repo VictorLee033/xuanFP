@@ -1,7 +1,7 @@
 # xuanFP 配置文件
 # ✅ 本文件不含任何密钥，可安全上传到公开仓库。
-# 🔑 你的真实 API 密钥请填写在本目录下的 config.local.yaml（已被 .gitignore 排除），
-#    或在界面右上角「设置」里填写，程序会自动读取。
+# 🔑 真实 API 密钥请填写在本目录下的 config.local.yaml（已被 .gitignore 排除），
+#    或在界面右上角「设置」里填写——程序会自动把密钥写入 config.local.yaml。
 app:
   host: 127.0.0.1
   port: 8710
@@ -37,7 +37,15 @@ llm:
   api_key: ""            # 真实 Key 见 config.local.yaml
   model: "deepseek-chat"
   timeout: 90
-  top_n_reports: 10      # 为排名前 N 名生成 LLM 报告
+  top_n_reports: 10
+
+# 邮件推送（14:25 短线榜单发邮箱；真实授权码见 config.local.yaml）
+mail:
+  smtp_host: "smtp.qq.com"
+  smtp_port: 465
+  sender: ""
+  auth_code: ""
+  recipient: ""
 
 # 扫描参数
 scanner:
@@ -47,15 +55,35 @@ scanner:
   moneyflow_days: 5
   top_list_days: 10
   margin_days: 30
-  # 九大维度权重（合计 100，按「数据可靠性优先 + 风格均衡」重构）
-  # 维度内各因子权重见 backend/domain/scanner/factors.py 的 FACTOR_WEIGHTS
+  stretch_beta: 0.15     # 综合分头部拉伸强度（0=不拉伸；越大头部越陡，>0.5会重新虚高）
+  # 回测库记录时点窗口：只有在该时段内完成的扫描才写入回测库（保证回测时点统一）
+  record_windows:
+    short: ["14:20", "14:35"]    # 短线 → 14:25 快照
+    normal: ["15:00", "15:20"]   # 标准 → 15:00 收盘
+  # 九大维度权重（合计 100）
   weights:
-    value: 13      # 价值估值（财报+快照，可靠）
-    quality: 16    # 资产质量（财报，最可靠）
-    growth: 15     # 盈利成长（财报，最可靠）
-    trend: 11      # 趋势技术面（K线，可靠）
-    momentum: 10   # 量价动能（K线+快照，可靠）
-    capital: 11    # 主力资金流（资金流+龙虎榜，较可靠）
-    chip: 12       # 情绪（筹码分布+综合情绪因子，权重放大）
-    safety: 7      # 安全边际（K线，可靠）
-    macro: 5       # 景气与宏观（行业+外盘映射，粗粒度）
+    value: 13      # 价值估值
+    quality: 16    # 资产质量
+    growth: 15     # 盈利成长
+    trend: 11      # 趋势技术面
+    momentum: 10   # 量价动能
+    capital: 11    # 主力资金流
+    chip: 12       # 情绪
+    safety: 7      # 安全边际
+    macro: 5       # 景气与宏观
+
+# 模式预设（短线模式：动量+资金+情绪为主，PE 放宽到 300）
+presets:
+  short:
+    label: "短线"
+    pe_max: 300
+    weights:
+      value: 5
+      quality: 8
+      growth: 8
+      trend: 18
+      momentum: 16
+      capital: 16
+      chip: 16
+      safety: 8
+      macro: 5

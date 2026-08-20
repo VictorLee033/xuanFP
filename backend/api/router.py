@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from .. import config as cfg
 from ..errors import DataSourceError, NotFoundError
 from ..llm import reporter
-from .schemas import ConfigBody
+from .schemas import ConfigBody, ScanBody
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,10 @@ def get_container(request: Request):
 
 # ---------------- 扫描 ----------------
 @router.post("/scan")
-def start_scan(request: Request):
-    started = request.app.state.container.scan.start()
-    return {"ok": True, "started": started}
+def start_scan(body: ScanBody | None = None, request: Request = None):
+    mode = (body.mode if body else None) or "normal"
+    started = request.app.state.container.scan.start(mode)
+    return {"ok": True, "started": started, "mode": mode}
 
 
 @router.get("/scan/progress")
@@ -97,8 +98,31 @@ def backtest_records(request: Request = None):
 
 
 @router.get("/backtest")
-def backtest(n: int = Query(5, ge=1, le=60), request: Request = None):
-    return request.app.state.container.backtest.run(n)
+def backtest(n: int = Query(5, ge=1, le=60),
+             mode: str = Query("normal", pattern="^(normal|short)$"),
+             request: Request = None):
+    return request.app.state.container.backtest.run(n, mode)
+
+
+# ---------------- 14:25 邮件推送 ----------------
+@router.post("/push/schedule")
+def push_schedule(request: Request = None):
+    return request.app.state.container.push.schedule()
+
+
+@router.post("/push/cancel")
+def push_cancel(request: Request = None):
+    return request.app.state.container.push.cancel()
+
+
+@router.post("/push/preview")
+def push_preview(request: Request = None):
+    return request.app.state.container.push.preview()
+
+
+@router.get("/push/status")
+def push_status(request: Request = None):
+    return request.app.state.container.push.status()
 
 
 # ---------------- 配置 ----------------
@@ -112,28 +136,47 @@ def get_api_config():
                     "pcd_api_key": c["tushare"]["pcd"]["api_key"],
                     "rds_base_url": c["tushare"]["rds"]["base_url"],
                     "rds_api_key": c["tushare"]["rds"]["api_key"]},
+        "mail": {"smtp_host": c["mail"]["smtp_host"], "smtp_port": c["mail"]["smtp_port"],
+                 "sender": c["mail"]["sender"], "auth_code": c["mail"]["auth_code"],
+                 "recipient": c["mail"]["recipient"]},
         "llm_available": reporter.llm_available(),
     }
 
 
 @router.put("/config")
 def put_api_config(body: ConfigBody, request: Request):
-    partial = {}
+    public, secrets = {}, {}
+    # ---- LLM：公共字段进 yaml，api_key 只进 local ----
     if body.llm is not None:
-        partial["llm"] = {k: v for k, v in body.llm.items() if v is not None}
+        pub = {k: v for k, v in body.llm.items() if v is not None and k != "api_key"}
+        if pub:
+            public["llm"] = pub
+        if body.llm.get("api_key") is not None:
+            secrets.setdefault("llm", {})["api_key"] = body.llm["api_key"]
+    # ---- Tushare：base_url 进 yaml，api_key 只进 local ----
     if body.tushare is not None:
-        t = {}
-        if body.tushare.get("pcd_api_key") is not None:
-            t.setdefault("pcd", {})["api_key"] = body.tushare["pcd_api_key"]
+        t_pub, t_sec = {}, {}
         if body.tushare.get("pcd_base_url") is not None:
-            t.setdefault("pcd", {})["base_url"] = body.tushare["pcd_base_url"]
-        if body.tushare.get("rds_api_key") is not None:
-            t.setdefault("rds", {})["api_key"] = body.tushare["rds_api_key"]
+            t_pub.setdefault("pcd", {})["base_url"] = body.tushare["pcd_base_url"]
         if body.tushare.get("rds_base_url") is not None:
-            t.setdefault("rds", {})["base_url"] = body.tushare["rds_base_url"]
-        if t:
-            partial["tushare"] = t
-    cfg.update_config(partial)
+            t_pub.setdefault("rds", {})["base_url"] = body.tushare["rds_base_url"]
+        if body.tushare.get("pcd_api_key") is not None:
+            t_sec.setdefault("pcd", {})["api_key"] = body.tushare["pcd_api_key"]
+        if body.tushare.get("rds_api_key") is not None:
+            t_sec.setdefault("rds", {})["api_key"] = body.tushare["rds_api_key"]
+        if t_pub:
+            public["tushare"] = t_pub
+        if t_sec:
+            secrets["tushare"] = t_sec
+    # ---- 邮件：全部含授权码，只进 local ----
+    if body.mail is not None:
+        m = {k: v for k, v in body.mail.items() if v is not None}
+        if m:
+            secrets["mail"] = m
+    if public:
+        cfg.update_config(public)
+    if secrets:
+        cfg.update_local_config(secrets)
     request.app.state.container.reload_datasources()
     return {"ok": True, "llm_available": reporter.llm_available()}
 

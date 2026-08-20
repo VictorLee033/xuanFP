@@ -59,3 +59,26 @@ def combine(dims, dim_weights):
             total_s += d["score"] * dim_weights.get(dim, 0)
             total_w += dim_weights.get(dim, 0)
     return (total_s / total_w) if total_w > 0 else None
+
+
+# 综合分「头部非线性拉伸」参数：
+# 对 >50 的分数做温和的二次拉伸，中低分(≤50)保持原样。
+# 全市场原始综合分第1名≈88，故 beta 取小值(0.15)即可把它抬到≈93、
+# 同时拉开头部名次，且不会像最终百分位那样冲到 99/100 造成虚高。
+STRETCH_BETA = 0.15
+
+
+def stretch_score(x, beta: float = STRETCH_BETA):
+    """综合分非线性拉伸：单调递增、连续，映射到 [0,100]（超出截断）。
+
+    - x ≤ 50：不变（y = x）
+    - x > 50：y = 50 + (x-50) * (1 + beta*(x-50)/50)，头部加速拉开
+    """
+    if x is None:
+        return None
+    x = float(x)
+    if x <= 50:
+        return round(x, 2)
+    d = x - 50.0
+    y = 50.0 + d * (1.0 + beta * d / 50.0)
+    return round(min(100.0, max(0.0, y)), 2)

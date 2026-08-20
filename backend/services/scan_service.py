@@ -21,23 +21,24 @@ class ScanService:
         self._engine = None
         self._state = {
             "running": False, "phase": "idle", "done": 0, "total": 0,
-            "message": "", "run_id": None, "last_error": None,
+            "message": "", "run_id": None, "last_error": None, "mode": "normal",
         }
 
     # ------------------------------------------------------------------
-    def start(self) -> bool:
-        """启动一次扫描。已运行则返回 False（不重复启动）。"""
+    def start(self, mode: str = "normal") -> bool:
+        """启动一次扫描。已运行则返回 False（不重复启动）。mode: normal/short"""
         with self._lock:
             if self._state["running"]:
                 return False
             self._state.update(running=True, phase="start", done=0, total=1,
-                               message="初始化…", run_id=None, last_error=None)
+                               message="初始化…", run_id=None, last_error=None,
+                               mode=mode)
 
         def progress(phase, done, total, message):
             with self._lock:
                 self._state.update(phase=phase, done=done, total=total, message=message)
 
-        engine = self.build_engine(progress)
+        engine = self.build_engine(progress, mode)
         self._engine = engine
         threading.Thread(target=self._run, args=(engine,), daemon=True).start()
         return True
