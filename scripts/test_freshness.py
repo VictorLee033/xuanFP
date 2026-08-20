@@ -6,7 +6,7 @@ import requests, urllib3, time
 urllib3.disable_warnings()
 
 PCD_URL = "https://pcd.mobcvb.cn/tushare/pro"
-PCD_KEY = "tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE"
+PCD_KEY = "YOUR_PCD_KEY"
 
 def pcd(api, **p):
     r = requests.get(f"{PCD_URL}/{api}", params=p, headers={"X-API-Key": PCD_KEY}, verify=False, timeout=60)

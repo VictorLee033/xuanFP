@@ -4,7 +4,7 @@ os.environ["NO_PROXY"] = "*"
 import requests, urllib3, time
 urllib3.disable_warnings()
 PCD_URL = "https://pcd.mobcvb.cn/tushare/pro"
-K = "tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE"
+K = "YOUR_PCD_KEY"
 for d in ["20250113", "20250630", "20260701", "20260814"]:
     t0 = time.time()
     try:

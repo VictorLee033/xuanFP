@@ -5,9 +5,9 @@ import requests, urllib3
 urllib3.disable_warnings()
 
 RDS_URL = "http://datahubco.com/app-api/openapi/v1/tushare"
-RDS_KEY = "dba548a206a453c197f9175189b757374fa6db9554bb29e69efea127"
+RDS_KEY = "YOUR_RDS_KEY"
 PCD_URL = "https://pcd.mobcvb.cn/tushare/pro"
-PCD_KEY = "tsr_1FjRkziz3M7m0aLcTk0ZgnK03__xO3EYq0ZdwQqdwSE"
+PCD_KEY = "YOUR_PCD_KEY"
 
 print("== RDS 接口重测 ==")
 for api, p in [
